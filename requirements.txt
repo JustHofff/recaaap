@@ -1,0 +1,10 @@
+transformers
+torch
+torchvision
+Pillow
+jiwer
+datasets
+matplotlib
+sentencepiece
+jupyter
+protobuf
