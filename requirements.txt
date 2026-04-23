@@ -8,3 +8,7 @@ matplotlib
 sentencepiece
 jupyter
 protobuf
+opencv-python
+numpy
+pymupdf
+pandas
