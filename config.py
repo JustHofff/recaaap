@@ -3,7 +3,7 @@ import torch
 
 DATASET_NAME = "jhofff/handwriting-dataset"
 PT_MODEL_NAME = "microsoft/trocr-small-handwritten"
-FT_MODEL_NAME = "justinhoffman/trocr-finetuned-handwriting"
+FT_MODEL_NAME = "jhofff/trocr-finetuned-handwriting"
 
 OUTPUT_DIR = "output/parsed_lines"
 
