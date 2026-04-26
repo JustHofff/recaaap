@@ -12,3 +12,5 @@ opencv-python
 numpy
 pymupdf
 pandas
+huggingface_hub
+gradio
