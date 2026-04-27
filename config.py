@@ -1,7 +1,7 @@
 # config.py
 import torch
 
-DATASET_NAME = "jhofff/handwriting-dataset"
+DATASET_NAME = "jhofff/handwriting-lines-cleaned"
 PT_MODEL_NAME = "microsoft/trocr-small-handwritten"
 FT_MODEL_NAME = "jhofff/trocr-finetuned-handwriting"
 
