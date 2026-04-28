@@ -1,6 +1,0 @@
-gradio
-transformers
-torch
-Pillow
-opencv-python-headless
-jiwer
