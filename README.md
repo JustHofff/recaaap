@@ -1,20 +1,40 @@
----
-title: Handwriting Recognition
-emoji: ✍️
-colorFrom: gray
-colorTo: red
-sdk: gradio
-sdk_version: "5.0"
-app_file: app/app.py
-pinned: false
----
-
 # RECAAAP
-**Reading English Characters As Acurrately As Possible**
+### Handwritten Text Recognition with TrOCR
 
-## Project Summary
+Fine-tuning Microsoft's TrOCR model for handwriting recognition, with a Gradio app for transcribing handwritten documents.
 
-Build an OCR system that classifies images of individual handwritten and
-printed characters (A–Z, a–z, 0–9) into their correct labels. Start
-simple, add complexity in layers, and finish with a usable demo app.
+---
 
+## Results
+
+| Model | CER | WER |
+|---|---|---|
+| Pretrained TrOCR (IAM baseline) | 2.54% | 6.74% |
+| Pretrained TrOCR (Kaggle dataset) | 13.69% | 48.63% |
+| Fine-tuned TrOCR (Kaggle dataset) | **6.77%** | **17.49%** |
+
+---
+
+## App
+
+Upload a scanned handwritten document and get back a transcription line by line.
+
+```bash
+pip install -r requirements-app.txt
+python app.py
+```
+
+---
+
+## Model
+
+Fine-tuned model available on Hugging Face: [`jhofff/trocr-finetuned-handwriting`](https://huggingface.co/jhofff/trocr-finetuned-handwriting)
+
+---
+
+## Stack
+
+- [TrOCR](https://huggingface.co/microsoft/trocr-small-handwritten) — Microsoft's transformer-based OCR model
+- [Hugging Face Transformers](https://github.com/huggingface/transformers)
+- [Gradio](https://gradio.app)
+- [OpenCV](https://opencv.org) — document line segmentation
