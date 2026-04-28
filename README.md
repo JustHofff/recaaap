@@ -20,7 +20,7 @@ Fine-tuning Microsoft's TrOCR model for handwriting recognition, with a Gradio a
 Upload a scanned handwritten document and get back a transcription line by line.
 
 ```bash
-pip install -r requirements-app.txt
+pip install -r requirements.txt
 python app.py
 ```
 
