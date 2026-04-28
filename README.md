@@ -21,7 +21,11 @@ Upload a scanned handwritten document and get back a transcription line by line.
 
 ```bash
 git clone git@github.com:JustHofff/recaaap.git
+```
+```bash
 pip install -r requirements.txt
+```
+```bash
 python app.py
 ```
 
