@@ -1,15 +1,28 @@
 # document_parser.py
+import os
 import cv2
 import numpy as np
 from pathlib import Path
+from PIL import Image
 
 MAX_WIDTH = 1500
 PADDING = 8
 MIN_BLOB_AREA = 20
 MIN_LINE_WIDTH = 50
 MIN_LINE_HEIGHT = 15
-MERGE_THRESHOLD_FACTOR = 0.8
 PDF_RENDER_SCALE = 2.0
+
+
+def create_incremented_dir(base_path, prefix=""):
+    counter = 1
+    while True:
+        dir_name = f"{prefix}{counter:03d}"
+        full_path = os.path.join(base_path, dir_name)
+        if not os.path.exists(full_path):
+            os.makedirs(full_path)
+            return full_path
+        counter += 1
+
 
 def load_image(path):
     """
@@ -32,7 +45,6 @@ def load_image(path):
         for page in doc:
             mat = fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE)
             pix = page.get_pixmap(matrix=mat)
-            # PyMuPDF gives us RGB — convert to BGR for OpenCV
             img_array = np.frombuffer(pix.samples, dtype=np.uint8)
             img_array = img_array.reshape(pix.h, pix.w, pix.n)
             img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
@@ -43,68 +55,60 @@ def load_image(path):
     else:
         raise ValueError(f"Unsupported file type: {suffix}. Expected jpg, png, tiff, or pdf.")
 
+
 def preprocess(img_color, max_width=MAX_WIDTH):
     """
-    Takes a BGR numpy array from load_image().
-    Returns (img_color_resized, img_binary)
+    Takes a BGR numpy array.
+    Returns (img_color_resized, img_binary).
     """
     h, w = img_color.shape[:2]
     if w > max_width:
         scale = max_width / w
-        new_w = max_width
-        new_h = int(h * scale)
-        img_color = cv2.resize(img_color, (new_w, new_h))
+        img_color = cv2.resize(img_color, (max_width, int(h * scale)))
 
     img_gray = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
-
     _, img_binary = cv2.threshold(
         img_gray, 0, 255,
         cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
-
     return img_color, img_binary
+
 
 def filter_lines(img_color, img_binary):
     """
-    Removes paper lines from img_binary using color detection.
-    Returns a cleaned copy of img_binary with ruled line pixels set to 0.
+    Removes ruled paper lines (blue/red) from img_binary using color detection.
+    Returns a cleaned copy of img_binary.
     """
     img_hsv = cv2.cvtColor(img_color, cv2.COLOR_BGR2HSV)
 
-    # Blue lines (notebook paper)
     lower_blue = np.array([100, 40, 40])
     upper_blue = np.array([130, 255, 255])
     mask_blue = cv2.inRange(img_hsv, lower_blue, upper_blue)
 
-    # Red lines (margin lines)
-    lower_red1 = np.array([0, 40, 40])
-    upper_red1 = np.array([10, 255, 255])
+    lower_red1 = np.array([0,   40, 40])
+    upper_red1 = np.array([10,  255, 255])
     lower_red2 = np.array([160, 40, 40])
     upper_red2 = np.array([179, 255, 255])
-    mask_red1 = cv2.inRange(img_hsv, lower_red1, upper_red1)
-    mask_red2 = cv2.inRange(img_hsv, lower_red2, upper_red2)
+    mask_red = cv2.bitwise_or(
+        cv2.inRange(img_hsv, lower_red1, upper_red1),
+        cv2.inRange(img_hsv, lower_red2, upper_red2)
+    )
 
-    # Combine all masks
-    mask_lines = cv2.bitwise_or(mask_blue, mask_red1)
-    mask_lines = cv2.bitwise_or(mask_lines, mask_red2)
-
-    # Remove masked pixels from binary image
+    mask_lines  = cv2.bitwise_or(mask_blue, mask_red)
     img_cleaned = img_binary.copy()
     img_cleaned[mask_lines > 0] = 0
-
     return img_cleaned
+
 
 def find_text_lines(img_cleaned, min_blob_area=MIN_BLOB_AREA):
     """
-    Finds bounding boxes for each line of text in img_cleaned.
-    min_blob_area filters out specks and noise.
-    Returns a list of (x, y, w, h) tuples, sorted top to bottom.
+    Finds bounding boxes for each line of text using ink-row projection.
+    Returns a list of (x, y, w, h) tuples sorted top to bottom.
     """
     num_labels, _, stats, _ = cv2.connectedComponentsWithStats(
         img_cleaned, connectivity=8
     )
 
-    # Collect valid blobs, skipping label 0 (background)
     blobs = []
     for i in range(1, num_labels):
         x = stats[i, cv2.CC_STAT_LEFT]
@@ -118,56 +122,44 @@ def find_text_lines(img_cleaned, min_blob_area=MIN_BLOB_AREA):
     if not blobs:
         return []
 
-    # Sort blobs top to bottom by their vertical center
-    blobs.sort(key=lambda b: b[1] + b[3] / 2)
+    img_h = img_cleaned.shape[0]
+    ink_rows = np.zeros(img_h, dtype=np.int32)
+    for (x, y, w, h) in blobs:
+        ink_rows[y:y + h] += 1
 
-    # Compute merge threshold from median blob height
-    heights = [b[3] for b in blobs]
-    median_h = sorted(heights)[len(heights) // 2]
-    merge_threshold = median_h * MERGE_THRESHOLD_FACTOR
+    kernel_size = max(5, img_h // 60)
+    ink_rows_smooth = np.convolve(ink_rows, np.ones(kernel_size), mode="same")
 
-    # Group blobs into lines
-    lines = []
-    current_group = [blobs[0]]
+    in_line = False
+    line_ranges = []
+    start = 0
+    for idx, val in enumerate(ink_rows_smooth):
+        if not in_line and val > 0:
+            in_line, start = True, idx
+        elif in_line and val == 0:
+            in_line = False
+            line_ranges.append((start, idx))
+    if in_line:
+        line_ranges.append((start, img_h))
 
-    # Compares against the group's full vertical span
-    for blob in blobs[1:]:
-        group_y0 = min(b[1] for b in current_group)
-        group_y1 = max(b[1] + b[3] for b in current_group)
-        group_center_y = (group_y0 + group_y1) / 2
-        this_center_y = blob[1] + blob[3] / 2
-
-        if abs(this_center_y - group_center_y) <= merge_threshold:
-            current_group.append(blob)
-        else:
-            lines.append(current_group)
-            current_group = [blob]
-    lines.append(current_group)
-
-    # Merge each group into one bounding box
     line_boxes = []
-    for group in lines:
-        x0 = min(b[0] for b in group)
-        y0 = min(b[1] for b in group)
-        x1 = max(b[0] + b[2] for b in group)
-        y1 = max(b[1] + b[3] for b in group)
-        line_boxes.append((x0, y0, x1 - x0, y1 - y0))
-
-    # Filter out boxes that are too small to be real lines
-    min_line_width = MIN_LINE_WIDTH
-    min_line_height = MIN_LINE_HEIGHT
-
-    line_boxes = [
-        box for box in line_boxes
-        if box[2] >= min_line_width and box[3] >= min_line_height
-    ]
+    for (y0, y1) in line_ranges:
+        in_range = [b for b in blobs if y0 <= b[1] + b[3] / 2 <= y1]
+        if not in_range:
+            continue
+        x0 = min(b[0] for b in in_range)
+        x1 = max(b[0] + b[2] for b in in_range)
+        lw, lh = x1 - x0, y1 - y0
+        if lw >= MIN_LINE_WIDTH and lh >= MIN_LINE_HEIGHT:
+            line_boxes.append((x0, y0, lw, lh))
 
     return line_boxes
 
+
 def crop_lines(img_color, line_boxes, output_dir, padding=PADDING):
     """
-    Crops each line box from img_color and saves as a PNG.
-    Returns a list of output file paths.
+    Crops each line box from img_color and saves as a PNG to output_dir.
+    Returns a list of saved file paths.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -176,14 +168,11 @@ def crop_lines(img_color, line_boxes, output_dir, padding=PADDING):
     saved_paths = []
 
     for i, (x, y, bw, bh) in enumerate(line_boxes):
-        # Add padding, clamped to image boundaries
         x0 = max(0, x - padding)
         y0 = max(0, y - padding)
         x1 = min(w, x + bw + padding)
         y1 = min(h, y + bh + padding)
-
         crop = img_color[y0:y1, x0:x1]
-
         path = output_dir / f"line_{i+1:03d}.png"
         cv2.imwrite(str(path), crop)
         saved_paths.append(path)
@@ -193,8 +182,7 @@ def crop_lines(img_color, line_boxes, output_dir, padding=PADDING):
 
 def parse_document(image_path, output_dir, max_width=MAX_WIDTH, padding=PADDING, min_blob_area=MIN_BLOB_AREA):
     """
-    Full pipeline: load → preprocess → filter lines → find text lines → crop.
-    Accepts jpg, png, tiff, or pdf.
+    Full pipeline for file-based usage: load → preprocess → filter → find → crop.
     Saves cropped line images to output_dir.
     Returns a list of saved file paths.
     """
@@ -211,11 +199,34 @@ def parse_document(image_path, output_dir, max_width=MAX_WIDTH, padding=PADDING,
         line_boxes = find_text_lines(img_cleaned, min_blob_area=min_blob_area)
         print(f"[3/4] Found {len(line_boxes)} text lines")
 
-        # Give each page its own subdirectory for multi-page PDFs
-        page_dir = Path(output_dir) / f"page_{page_num+1:03d}"
+        page_dir = create_incremented_dir(Path(output_dir), "page_")
         paths = crop_lines(img_color, line_boxes, page_dir, padding=padding)
         print(f"[4/4] Saved {len(paths)} crops to {page_dir}")
 
         all_paths.extend(paths)
 
     return all_paths
+
+
+def parse_pil_image(pil_image, padding=PADDING, min_blob_area=MIN_BLOB_AREA):
+    """
+    In-memory pipeline for app usage: PIL image → list of PIL line crops.
+    No files written to disk.
+    """
+    img_array = np.array(pil_image.convert("RGB"))
+    img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+    img_color, img_bin = preprocess(img_bgr)
+    img_cleaned = filter_lines(img_color, img_bin)
+    line_boxes = find_text_lines(img_cleaned, min_blob_area=min_blob_area)
+
+    h, w = img_color.shape[:2]
+    crops = []
+    for (x, y, bw, bh) in line_boxes:
+        x0 = max(0, x - padding)
+        y0 = max(0, y - padding)
+        x1 = min(w, x + bw + padding)
+        y1 = min(h, y + bh + padding)
+        crop_rgb = cv2.cvtColor(img_color[y0:y1, x0:x1], cv2.COLOR_BGR2RGB)
+        crops.append(Image.fromarray(crop_rgb))
+
+    return crops
